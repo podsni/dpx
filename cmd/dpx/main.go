@@ -208,6 +208,8 @@ func run(args []string, opts runOptions) error {
 		return runRepassword(svc, args[1:], opts)
 	case "tui":
 		return runTUI(svc, cfg, opts)
+	case "dlx":
+		return runDlx(args[1:], opts)
 	default:
 		if isDirectFileInvocation(args[0], opts.cwd) {
 			return runDirectPathInvocation(svc, cfg, args, opts)
@@ -2230,6 +2232,8 @@ var commandAliases = map[string]string{
 	"repassword":        "repassword",
 	"passwd":            "repassword",
 	"tui":               "tui",
+	"dlx":               "dlx",
+	"fetch":             "dlx",
 	"version":           "version",
 	"--version":         "version",
 	"-v":                "version",
@@ -2274,7 +2278,7 @@ func suggestCommand(input string) string {
 	if strings.TrimSpace(input) == "" {
 		return ""
 	}
-	candidates := []string{"init", "doctor", "uninstall", "update", "rollback", "genpass", "hook", "env", "keygen", "encrypt", "decrypt", "inspect", "rotate", "repassword", "tui", "version", "help"}
+	candidates := []string{"init", "doctor", "uninstall", "update", "rollback", "genpass", "hook", "env", "keygen", "encrypt", "decrypt", "inspect", "rotate", "repassword", "tui", "dlx", "version", "help"}
 	best := ""
 	bestDistance := 99
 	for _, candidate := range candidates {
@@ -2746,6 +2750,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  dpx env set .env --key API_KEY --value abc --encrypt --mode age")
 	fmt.Fprintln(w, "  dpx env updatekeys .env.dpx --recipient age1new...,age1team...")
 	fmt.Fprintln(w, "  dpx keygen --import-file age-keys.txt")
+	fmt.Fprintln(w, "  dpx dlx https://github.com/o/r/blob/main/file.go")
+	fmt.Fprintln(w, "  dpx dlx https://github.com/o/r/tree/main/src")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  init")
@@ -2759,6 +2765,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  run")
 	fmt.Fprintln(w, "  policy (check)")
 	fmt.Fprintln(w, "  tui")
+	fmt.Fprintln(w, "  dlx (fetch)")
 	fmt.Fprintln(w, "  doctor")
 	fmt.Fprintln(w, "  uninstall")
 	fmt.Fprintln(w, "  update")
@@ -2783,6 +2790,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  env get: [file] --key [--password] [--identity]")
 	fmt.Fprintln(w, "  env set: [file] --key --value [--encrypt --mode --recipient --password --kdf-profile --out]")
 	fmt.Fprintln(w, "  env updatekeys: [file] --recipient [--keys] [--identity] [--out]")
+	fmt.Fprintln(w, "  dlx: <github-url> [--output|-o] [--token] [--ref] [--no-prefix] [--quiet]")
 	fmt.Fprintln(w, "Notes:")
 	fmt.Fprintln(w, "  - update/rollback use local binary backup file (.rollback)")
 	fmt.Fprintln(w, "  - optional env DPX_UPDATE_BASE_URL overrides release asset base URL")
