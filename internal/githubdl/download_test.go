@@ -313,3 +313,91 @@ func TestDownloadContextCancel(t *testing.T) {
 		t.Fatal("expected context cancellation error")
 	}
 }
+
+func TestDownloadFolderWithGlob(t *testing.T) {
+	t.Parallel()
+
+	// Mirror the recursive test, but filter for *.tsx files.
+	const tsx = "export const X = 1;\n"
+	const goFile = "package x\n"
+	const mdFile = "# title\n"
+
+	apiList := func(rel string, body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			gotPath := strings.TrimSuffix(r.URL.Path, "/")
+			wantPath := "/repos/o/r/contents/" + rel
+			wantPath = strings.TrimSuffix(wantPath, "/")
+			if gotPath != wantPath {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(body))
+		}
+	}
+
+	rootContents, _ := json.Marshal([]entry{
+		{Name: "Header.tsx", Path: "src/Header.tsx", Type: "file", Size: int64(len(tsx))},
+		{Name: "main.go", Path: "src/main.go", Type: "file", Size: int64(len(goFile))},
+		{Name: "README.md", Path: "README.md", Type: "file", Size: int64(len(mdFile))},
+	})
+
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"/repos/o/r/contents/":     apiList("", string(rootContents)),
+		"/o/r/main/src/Header.tsx": rawHandler(tsx),
+		"/o/r/main/src/main.go":    rawHandler(goFile),
+		"/o/r/main/README.md":      rawHandler(mdFile),
+	})
+
+	c := NewClient("")
+	c.API = srv.URL
+	c.Raw = srv.URL
+
+	req, _ := Parse("https://github.com/o/r/tree/main")
+	dst := t.TempDir()
+	var got []string
+	if err := c.Download(context.Background(), req, Options{
+		Root: dst,
+		Glob: "*.tsx",
+		Progress: func(_ int, rel string, _ int64) {
+			got = append(got, rel)
+		},
+	}); err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if len(got) != 1 || got[0] != "src/Header.tsx" {
+		t.Errorf("expected only src/Header.tsx, got %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "src", "Header.tsx")); err != nil {
+		t.Errorf("expected Header.tsx on disk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "src", "main.go")); !os.IsNotExist(err) {
+		t.Errorf("main.go should not be downloaded, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "README.md")); !os.IsNotExist(err) {
+		t.Errorf("README.md should not be downloaded, stat err = %v", err)
+	}
+}
+
+func TestDownloadFolderInvalidGlob(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		"/repos/o/r/contents/": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("[]"))
+		},
+	})
+	c := NewClient("")
+	c.API = srv.URL
+	req, _ := Parse("https://github.com/o/r/tree/main")
+
+	err := c.Download(context.Background(), req, Options{
+		Root: t.TempDir(),
+		Glob: "[invalid",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid glob")
+	}
+	if !strings.Contains(err.Error(), "invalid glob") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

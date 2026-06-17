@@ -235,3 +235,34 @@ func TestSafeLocalPathCrossPlatformJoin(t *testing.T) {
 		t.Errorf("path = %q, want %q", got, want)
 	}
 }
+
+func TestMatchGlob(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		// Basename patterns (no slash) match the file name at any depth.
+		{"*.tsx", "src/Header.tsx", true},
+		{"*.tsx", "Header.tsx", true},
+		{"*.tsx", "src/lib/Header.tsx", true},
+		{"*.tsx", "src/Header.ts", false},
+		{"*.go", "README.md", false},
+		{"README*", "README.md", true},
+		{"README*", "src/README.md", true},
+		// Slash patterns match the full path; '*' does not cross '/'.
+		{"src/*.tsx", "src/Header.tsx", true},
+		{"src/*.tsx", "src/lib/Header.tsx", false},
+		{"src/*.go", "src/main.go", true},
+		{"docs/*", "docs/intro.md", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.pattern+"_"+tc.path, func(t *testing.T) {
+			if got := matchGlob(tc.pattern, tc.path); got != tc.want {
+				t.Errorf("matchGlob(%q, %q) = %v, want %v",
+					tc.pattern, tc.path, got, tc.want)
+			}
+		})
+	}
+}

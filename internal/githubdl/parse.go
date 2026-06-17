@@ -20,6 +20,7 @@ package githubdl
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -269,4 +270,26 @@ func isWindowsReservedName(name string) bool {
 		return true
 	}
 	return false
+}
+
+// matchGlob reports whether relPath matches pattern, with sensible
+// behavior for both folder-scoped and file-scoped patterns.
+//
+// Rules:
+//   - When the pattern contains '/', it is matched against the full
+//     repo-relative path (e.g. "src/*.go" matches "src/main.go" but
+//     not "src/lib/main.go").
+//   - When the pattern has no '/', it is matched against the file
+//     basename (e.g. "*.go" matches "src/main.go" and "main.go").
+//
+// This makes `*.tsx` behave like a typical shell glob while still
+// supporting folder-scoped patterns like `src/components/*.tsx`.
+// Invalid patterns return false (callers can validate separately).
+func matchGlob(pattern, relPath string) bool {
+	if strings.ContainsRune(pattern, '/') {
+		ok, _ := path.Match(pattern, relPath)
+		return ok
+	}
+	ok, _ := path.Match(pattern, filepath.Base(relPath))
+	return ok
 }

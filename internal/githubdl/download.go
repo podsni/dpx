@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,6 +43,15 @@ type Options struct {
 	// RepoPrefix, when true, places all files under <Root>/<repo>/...
 	// so multiple downloads from different repos do not collide.
 	RepoPrefix bool
+	// Glob, if non-empty, restricts folder downloads to files whose
+	// repo-relative path matches the pattern. Pattern syntax follows
+	// path.Match: '*' matches any non-separator run, '?' matches one
+	// character, '[...]' matches a class. Empty means download all.
+	// Ignored for single-file downloads.
+	Glob string
+	// MaxSize, if non-zero, overrides the package's MaxFileSize cap
+	// for the duration of this Download call.
+	MaxSize int64
 	// Progress, if non-nil, is called after each file is written. The
 	// counter starts at 1; the path is the relative path inside Root.
 	Progress func(downloaded int, relPath string, size int64)
@@ -109,6 +119,11 @@ func (c *Client) downloadFile(ctx context.Context, req Request, opts Options) er
 		return fmt.Errorf("create root: %w", err)
 	}
 
+	maxSize := MaxFileSize
+	if opts.MaxSize > 0 {
+		maxSize = opts.MaxSize
+	}
+
 	rel := req.Path
 	if rel == "" {
 		// /<owner>/<repo>/blob/<ref>/  with no file — pick a default name.
@@ -129,7 +144,7 @@ func (c *Client) downloadFile(ctx context.Context, req Request, opts Options) er
 	if !ok {
 		return fmt.Errorf("internal: fetchRaw did not return countingReader")
 	}
-	if err := writeFileAtomic(dst, src); err != nil {
+	if err := writeFileAtomicSize(dst, src, maxSize); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
 	}
 	size := cr.n
@@ -242,8 +257,23 @@ func (c *Client) downloadFolder(ctx context.Context, req Request, opts Options) 
 		return fmt.Errorf("create root: %w", err)
 	}
 
+	// Validate the glob once so the user gets a clear error before
+	// any network traffic. matchGlob itself tolerates invalid input
+	// (returns false) to keep the hot path cheap, but a typo here is
+	// almost always a user mistake.
+	if opts.Glob != "" {
+		if _, err := path.Match(opts.Glob, "x"); err != nil {
+			return fmt.Errorf("invalid glob %q: %w", opts.Glob, err)
+		}
+	}
+
+	maxSize := MaxFileSize
+	if opts.MaxSize > 0 {
+		maxSize = opts.MaxSize
+	}
+
 	count := 0
-	return c.walkFolder(ctx, req, root, func(rel string, size int64) error {
+	return c.walkFolder(ctx, req, root, opts, maxSize, func(rel string, size int64) error {
 		count++
 		if opts.Progress != nil {
 			opts.Progress(count, rel, size)
@@ -256,7 +286,11 @@ func (c *Client) downloadFolder(ctx context.Context, req Request, opts Options) 
 // it calls onFile with the path relative to root. The walk is
 // depth-first and pre-order (directories are entered before their
 // files are visited).
-func (c *Client) walkFolder(ctx context.Context, req Request, root string, onFile func(rel string, size int64) error) error {
+//
+// When opts.Glob is non-empty, only files whose repo-relative path
+// matches the pattern are downloaded. Directories are still walked
+// because matching files may live at any depth.
+func (c *Client) walkFolder(ctx context.Context, req Request, root string, opts Options, maxSize int64, onFile func(rel string, size int64) error) error {
 	var recurse func(rel string) error
 	recurse = func(rel string) error {
 		entries, err := c.listContents(ctx, req, rel)
@@ -270,6 +304,11 @@ func (c *Client) walkFolder(ctx context.Context, req Request, root string, onFil
 					return err
 				}
 			case "file":
+				if opts.Glob != "" {
+					if !matchGlob(opts.Glob, e.Path) {
+						continue
+					}
+				}
 				// Fetch the file. We re-derive the request path from
 				// the entry to avoid relying on the API's URL field,
 				// which can be a permalink with a different ref.
@@ -289,7 +328,7 @@ func (c *Client) walkFolder(ctx context.Context, req Request, root string, onFil
 					_ = rc.Close()
 					return err
 				}
-				if err := writeFileAtomic(dst, rc); err != nil {
+				if err := writeFileAtomicSize(dst, cr, maxSize); err != nil {
 					_ = rc.Close()
 					return fmt.Errorf("write %s: %w", dst, err)
 				}
@@ -359,6 +398,14 @@ func readAll(r io.Reader) string {
 // back to remove-then-rename. The window is small but acceptable
 // because we are downloading into a directory we just created.
 func writeFileAtomic(path string, r io.Reader) (retErr error) {
+	return writeFileAtomicSize(path, r, MaxFileSize)
+}
+
+// writeFileAtomicSize is writeFileAtomic with an explicit byte cap.
+// The cap is enforced on the bytes that actually land on disk (no
+// truncation on success). On overflow the temp file is removed and
+// the destination is never touched.
+func writeFileAtomicSize(path string, r io.Reader, maxSize int64) (retErr error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -374,16 +421,15 @@ func writeFileAtomic(path string, r io.Reader) (retErr error) {
 		}
 	}()
 
-	// Cap at MaxFileSize even when the server does not advertise it.
-	limited := io.LimitReader(r, MaxFileSize+1)
-	written, err := io.Copy(tmp, limited)
-	if err != nil {
+	// Cap at maxSize even when the server does not advertise it.
+	limited := &capReaderSized{r: r, max: maxSize}
+	if _, err := io.Copy(tmp, limited); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if written > MaxFileSize {
+	if limited.truncated {
 		_ = tmp.Close()
-		return fmt.Errorf("file too large (exceeds %d bytes)", MaxFileSize)
+		return fmt.Errorf("file too large (exceeds %d bytes)", maxSize)
 	}
 	if err := tmp.Chmod(0o644); err != nil {
 		_ = tmp.Close()
@@ -402,4 +448,30 @@ func writeFileAtomic(path string, r io.Reader) (retErr error) {
 		}
 	}
 	return nil
+}
+
+// capReaderSized stops reading once max bytes have been observed.
+// It is single-use.
+type capReaderSized struct {
+	r         io.Reader
+	max       int64
+	n         int64
+	truncated bool
+}
+
+func (c *capReaderSized) Read(p []byte) (int, error) {
+	if c.truncated {
+		return 0, io.EOF
+	}
+	remaining := c.max + 1 - c.n
+	if remaining <= 0 {
+		c.truncated = true
+		return 0, io.EOF
+	}
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
