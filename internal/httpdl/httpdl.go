@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -158,7 +159,10 @@ func inferFilename(rawURL, contentDisposition string) string {
 	if err != nil || u.Path == "" {
 		return ""
 	}
-	base := filepath.Base(u.Path)
+	// URL paths are always POSIX-style ("/"), so use path.Base rather
+	// than filepath.Base — on Windows the latter converts "/" to "\"
+	// and yields a backslash instead of an empty basename.
+	base := path.Base(u.Path)
 	// Strip query-ish suffix that url.Parse may have left in.
 	if idx := strings.IndexByte(base, '?'); idx >= 0 {
 		base = base[:idx]

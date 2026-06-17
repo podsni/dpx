@@ -846,9 +846,9 @@ func TestIsEncryptedPath(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		path     string
-		suffix   string
-		want     bool
+		path   string
+		suffix string
+		want   bool
 	}{
 		{"/tmp/.env.dpx", ".dpx", true},
 		{"/tmp/.env", ".dpx", false},
