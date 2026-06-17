@@ -6,14 +6,25 @@ It supports two practical encryption modes:
 - `age` for public-key workflows and team sharing
 - `Argon2id + XChaCha20-Poly1305` for password-based encryption
 
+It also ships with `dpx dlx` for downloading GitHub files/folders (or any HTTPS URL) without cloning the whole repo.
+
+> **Fork notice**: This repository is the personal fork at
+> [`podsni/dpx`](https://github.com/podsni/dpx). The upstream lives at
+> [`dwirx/dpx`](https://github.com/dwirx/dpx); all upstream history is
+> preserved and `v0.0.17+` adds `dpx dlx`, friendly CLI errors, and a
+> smarter `dpx doctor`. See [`CHANGELOG.md`](./CHANGELOG.md) for the
+> delta.
+
 Latest changes are tracked in [`CHANGELOG.md`](./CHANGELOG.md).
 
 Additional guides:
 - [`docs/env-inline-workflow.md`](./docs/env-inline-workflow.md)
 - [`docs/creation-rules.md`](./docs/creation-rules.md)
-- [`docs/testing-report-2026-03-18.md`](./docs/testing-report-2026-03-18.md)
 - [`docs/password-workflow.md`](./docs/password-workflow.md)
+- [`docs/installation.md`](./docs/installation.md)
+- [`docs/dpx-dlx.md`](./docs/dpx-dlx.md)
 - [`docs/agent-skill-usage.md`](./docs/agent-skill-usage.md)
+- [`docs/testing-report-2026-03-18.md`](./docs/testing-report-2026-03-18.md)
 - [`docs/testing-report-2026-03-20.md`](./docs/testing-report-2026-03-20.md)
 
 ## ✨ Features
@@ -28,38 +39,62 @@ Additional guides:
 - Password KDF profiles: `balanced`, `hardened`, `paranoid` (`--kdf-profile`)
 - Password generator command: `dpx genpass` (`--length`, `--copy-password`)
 - Password rotation command: `dpx repassword` for `.dpx` + inline password tokens
+- `dpx dlx` — download GitHub files/folders or any HTTPS URL (`--output`, `--no-prefix`, `--ref`, `--glob`, `--max-size`, `--token`)
+- Friendly CLI error messages with actionable hints (`dpx e none.txt` → "source file not found: ... Check the path, or use 'dpx doctor'")
+- Smarter `dpx doctor` with context-aware remediation suggestions
 - Safe `uninstall` command with confirmation and cleanup flags
-- `doctor` command to check config, key, and project readiness
+- `rotate` command to regenerate age keypairs and re-encrypt everything
+- `hook install` / `uninstall` git pre-commit hooks for `policy check`
+- `run` command to load env then exec child process
+- `policy check` for plaintext-sensitive keys
 - Hidden password prompt on real terminals
 - Armored `.dpx` file format with metadata tamper detection
-- GitHub Actions CI and manual release workflow
+- GitHub Actions CI (Ubuntu + macOS + Windows) and manual release workflow
 - Quick install scripts for Linux, macOS, and Windows
+- Self-update + rollback: `dpx update`, `dpx rollback`
 
 ## 🚀 Quick Install
 
-Recommended install from GitHub Releases.
+Recommended install from this fork's GitHub Releases.
 
 ### Linux and macOS
 
 ```bash
-curl -sSL https://github.com/dwirx/dpx/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/podsni/dpx/main/scripts/install.sh | bash
+```
+
+To pin a version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/podsni/dpx/main/scripts/install.sh | bash -s -- --version v0.0.17
 ```
 
 ### Windows PowerShell
 
 ```powershell
-irm https://github.com/dwirx/dpx/releases/latest/download/install.ps1 | iex
+iex (iwr https://raw.githubusercontent.com/podsni/dpx/main/scripts/install.ps1).Content
+```
+
+To pin a version:
+
+```powershell
+$env:DPX_VERSION = "v0.0.17"
+iex (iwr https://raw.githubusercontent.com/podsni/dpx/main/scripts/install.ps1).Content
 ```
 
 After install:
 
 ```bash
 dpx --version
+dpx doctor
 ```
+
+See [`docs/installation.md`](./docs/installation.md) for manual install, cross-platform notes, and self-update.
 
 ## 📦 Download Binary
 
 Download from GitHub Releases:
+<https://github.com/podsni/dpx/releases/latest>
 
 | Platform | Architecture | Download |
 | --- | --- | --- |
@@ -88,15 +123,17 @@ Windows:
 ## 🧰 Install via Go
 
 ```bash
-go install github.com/dwirx/dpx/cmd/dpx@latest
+go install github.com/podsni/dpx/cmd/dpx@v0.0.17
 ```
+
+Or `@latest` for the newest tagged release.
 
 ## 🛠️ Build From Source
 
 ```bash
-git clone https://github.com/dwirx/dpx
+git clone https://github.com/podsni/dpx
 cd dpx
-go build -o dpx ./cmd/dpx
+make build VERSION=dev
 sudo mv dpx /usr/local/bin/  # Linux/macOS
 ```
 

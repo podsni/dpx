@@ -1,11 +1,16 @@
 param(
     [string]$InstallDir = "",
     [string]$Version = "",
-    [string]$BaseUrl = "https://github.com/dwirx/dpx/releases/latest/download"
+    [string]$BaseUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
 $BinaryName = "dpx"
+$Repo = if ($env:DPX_REPO) { $env:DPX_REPO } else { "podsni/dpx" }
+
+if (-not $BaseUrl) {
+    $BaseUrl = "https://github.com/$Repo/releases/latest/download"
+}
 
 if ($env:DPX_INSTALL_DIR) { $InstallDir = $env:DPX_INSTALL_DIR }
 if ($env:DPX_VERSION) { $Version = $env:DPX_VERSION }
@@ -19,7 +24,7 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
 
 $Asset = "${BinaryName}_windows_${Arch}.zip"
 if ($Version) {
-    $BaseUrl = "https://github.com/dwirx/dpx/releases/download/$Version"
+    $BaseUrl = "https://github.com/$Repo/releases/download/$Version"
 }
 $DownloadUrl = "$BaseUrl/$Asset"
 

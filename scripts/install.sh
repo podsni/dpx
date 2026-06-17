@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="dwirx/dpx"
+REPO="${DPX_REPO:-podsni/dpx}"
 BINARY_NAME="dpx"
 BASE_URL="https://github.com/${REPO}/releases/latest/download"
 INSTALL_DIR=""
