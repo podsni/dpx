@@ -168,6 +168,9 @@ func (c *Client) fetchRaw(ctx context.Context, req Request) (io.ReadCloser, int6
 		return nil, 0, err
 	}
 	req2.Header.Set("User-Agent", "dpx-githubdl/1.0")
+	if c.Token != "" {
+		req2.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	resp, err := c.HTTP.Do(req2)
 	if err != nil {
 		return nil, 0, fmt.Errorf("download: %w", err)

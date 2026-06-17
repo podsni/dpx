@@ -202,6 +202,42 @@ func TestDownloadHonoursToken(t *testing.T) {
 	}
 }
 
+func TestDownloadFileSendsToken(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth atomic.Value
+	srv := newTestServer(t, map[string]http.HandlerFunc{
+		// Folder listing returns empty (single-file mode ignores it).
+		"/repos/o/r/contents/": func(w http.ResponseWriter, r *http.Request) {
+			gotAuth.Store(r.Header.Get("Authorization"))
+			_, _ = w.Write([]byte("[]"))
+		},
+	})
+
+	const wantBody = "package x\n"
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// raw fetch hits the secondary server (Raw URL)
+		gotAuth.Store(r.Header.Get("Authorization"))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(wantBody)))
+		_, _ = w.Write([]byte(wantBody))
+	}))
+	defer srv2.Close()
+
+	c := NewClient("ghp_filetoken")
+	c.API = srv.URL
+	c.Raw = srv2.URL
+
+	req, _ := Parse("https://github.com/o/r/blob/main/x.go")
+	dir := t.TempDir()
+	if err := c.Download(context.Background(), req, Options{Root: dir}); err != nil {
+		t.Fatalf("download: %v", err)
+	}
+
+	if got := gotAuth.Load(); got != "Bearer ghp_filetoken" {
+		t.Errorf("raw Authorization = %v, want Bearer ghp_filetoken", got)
+	}
+}
+
 func TestDownloadWithRepoPrefix(t *testing.T) {
 	t.Parallel()
 
