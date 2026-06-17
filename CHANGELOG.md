@@ -7,6 +7,103 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [v0.0.17] - 2026-06-17
+
+> Personal fork of [`dwirx/dpx`](https://github.com/dwirx/dpx) hosted at
+> [`podsni/dpx`](https://github.com/podsni/dpx). All upstream history is preserved;
+> entries below describe changes layered on top of `v0.0.16`.
+
+### Added
+
+- **`dpx dlx`** (alias: `fetch`) - download files and folders from GitHub, or
+  any HTTPS URL, with a single command:
+  - GitHub single-file: `dpx dlx https://github.com/<o>/<r>/blob/<ref>/<path>`
+  - GitHub folder (recursive): `dpx dlx https://github.com/<o>/<r>/tree/<ref>/<path>`
+  - GitHub raw URLs: `dpx dlx https://raw.githubusercontent.com/<o>/<r>/<ref>/<path>`
+  - Release tarballs and non-standard `github.com` URLs auto-fall-back to
+    generic HTTPS download
+  - Any other HTTPS URL works via the generic downloader
+  - Multiple URLs in one command: `dpx dlx url1 url2 url3 --output ./downloads`
+  - Flags:
+    - `--output <dir>` - output directory (default: `.`)
+    - `--no-prefix` - skip the `<repo>/` directory prefix
+    - `--ref <ref>` - override branch/tag (default: derived from URL)
+    - `--glob <pattern>` - filter files in folder downloads
+      (`*` without `/` matches basename at any depth; with `/` matches full
+      repo-relative path via Go `path.Match`)
+    - `--max-size <bytes>` - max bytes per file (default: `104857600`, 100 MiB)
+    - `--token <pat>` - GitHub PAT (or env `DPX_GITHUB_TOKEN`)
+    - `--quiet` - suppress per-file output
+  - Filename inference: URL basename, `Content-Disposition: filename="..."`,
+    `Content-Disposition: filename*=UTF-8''...` (RFC 6266), or `download.bin`
+  - Submodules and symlinks are skipped to prevent directory-escape
+- **`internal/httpdl` package** - generic HTTPS downloader with:
+  - `Accept-Encoding: identity` to avoid surprise decompression
+  - 5-minute timeout, configurable transport
+  - Filename sanitization (control chars stripped, Windows reserved names
+    rejected)
+  - Atomic write via temp + rename (Windows fallback: remove-then-rename)
+- **`internal/githubdl` package** - GitHub-aware downloader with:
+  - URL parser handling `blob`, `tree`, and `raw.githubusercontent.com` shapes
+  - `SafeLocalPath` rejects Windows reserved names, `..` traversal, and NUL bytes
+  - Recursive `walkFolder` (depth-first pre-order) via GitHub Trees API
+  - `countingReader` wrapper to work around Go transparently decompressing
+    `Content-Length: -1` chunked responses
+  - Atomic write with Windows-safe rename fallback
+- **`dpx doctor`** now branches on the detected issue with concrete next steps:
+  - Config syntax error - points to the failing line; suggests backup + reset
+  - Missing config - walks through `dpx init`
+  - Identity key exists but no recipients in config - shows how to add one
+  - Encrypted files in tree but no identity key - points to `dpx genkey` / age docs
+
+### Changed
+
+- **Friendly CLI error messages** - hard-to-decipher Go errors now produce
+  actionable hints with the next command to run:
+  - `source file not found` - suggests `dpx doctor` or path check
+  - `cannot decrypt: wrong password or file is corrupted` - suggests `dpx d`
+    to inspect envelope metadata
+  - `unknown command "<x>"` - suggests `dpx --help`
+- **`dpx dlx` help** - cross-platform section added (Windows reserved names,
+  atomic write fallback, `filepath.Join` usage, read-only bit on Windows).
+
+### Fixed
+
+- `SafeLocalPath` no longer strips the final path segment when its file is
+  missing (regression from the initial implementation).
+- URL parser now correctly handles `#` characters in GitHub paths.
+- Folder downloads now apply the repo prefix consistently (previously only
+  file downloads did).
+- Size reporting now shows actual bytes instead of `?` for GitHub raw
+  responses (chunked transfer + transparent decompression workaround).
+
+### Security
+
+- `SafeLocalPath` rejects:
+  - Windows reserved device names (`CON`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`,
+    plus the same with any extension)
+  - Path traversal attempts (`..` resolving outside output root)
+  - NUL bytes and other control characters
+  - Path separators embedded in server-supplied filenames
+- Atomic write prevents partial-file leakage on crash/interrupt
+  (Windows: remove-then-rename fallback when `os.Rename` refuses overwrite).
+- Filenames from `Content-Disposition` headers are sanitized before use.
+
+### Tests
+
+- **+86 new tests** since `v0.0.16`:
+  - 31 in `internal/httpdl` (URL parsing, filename inference, redirects,
+    Content-Disposition, override, path-safety, max-size, cancel)
+  - 27 in `internal/githubdl/parse` (all URL shapes, error cases, glob
+    semantics, Windows reserved names, traversal rejection)
+  - 14 in `internal/githubdl/download` (mocked `httptest.Server`: file,
+    folder, rate-limit, token header, repo prefix, traversal, cancel,
+    size limit, atomic write)
+  - 14 in `internal/tui` (coverage for previously uncovered TUI helpers:
+    `encryptOptions`, `encryptScopeName`, `isEncryptedPath`, `splitCSV`,
+    `parseEnvKeysInput`, `extractAgeSecretKey`, `filterPathsByQuery`)
+- **254 tests total** (`go test -race ./...`), race-clean, vet-clean, gofmt-clean.
+
 ## [v0.0.16] - 2026-03-20
 
 ### Added
