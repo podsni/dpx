@@ -13,6 +13,7 @@ import (
 	"github.com/dwirx/dpx/internal/app"
 	"github.com/dwirx/dpx/internal/config"
 	"github.com/dwirx/dpx/internal/crypto/agex"
+	"github.com/dwirx/dpx/internal/discovery"
 )
 
 func TestModelEncryptWithoutCandidatesPromptsManualPath(t *testing.T) {
@@ -800,4 +801,247 @@ func TestSplitSearchMatch(t *testing.T) {
 	if ok {
 		t.Fatalf("did not expect match")
 	}
+}
+
+func TestEncryptOptionsIncludesManualPath(t *testing.T) {
+	t.Parallel()
+
+	candidates := []discovery.Candidate{
+		{Path: "/tmp/a.env"},
+		{Path: "/tmp/b.env"},
+	}
+	got := encryptOptions(candidates)
+
+	if len(got) != len(candidates)+1 {
+		t.Fatalf("expected %d options, got %d", len(candidates)+1, len(got))
+	}
+	if got[len(got)-1] != manualEncryptPathOption {
+		t.Fatalf("expected last option to be manual path, got %q", got[len(got)-1])
+	}
+	if got[0] != "/tmp/a.env" || got[1] != "/tmp/b.env" {
+		t.Fatalf("expected candidate order preserved, got %#v", got)
+	}
+
+	if got := encryptOptions(nil); len(got) != 1 || got[0] != manualEncryptPathOption {
+		t.Fatalf("expected single manual option for empty candidates, got %#v", got)
+	}
+}
+
+func TestEncryptScopeName(t *testing.T) {
+	t.Parallel()
+
+	if got := encryptScopeName(encryptScopeEnv); got != ".env" {
+		t.Fatalf("expected .env scope name, got %q", got)
+	}
+	if got := encryptScopeName(encryptScopeAny); got != "all files" {
+		t.Fatalf("expected 'all files' scope name, got %q", got)
+	}
+	// Default scope (zero value) should also report "all files".
+	if got := encryptScopeName(encryptScope("")); got != "all files" {
+		t.Fatalf("expected zero scope to be 'all files', got %q", got)
+	}
+}
+
+func TestIsEncryptedPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		path     string
+		suffix   string
+		want     bool
+	}{
+		{"/tmp/.env.dpx", ".dpx", true},
+		{"/tmp/.env", ".dpx", false},
+		{"/tmp/secrets.enc", ".enc", true},
+		{"/tmp/secrets.enc", ".dpx", false},
+		{"/tmp/secrets.dpx", ".enc", true}, // .dpx is always encrypted
+		{"", ".dpx", false},
+	}
+	for _, tc := range cases {
+		if got := isEncryptedPath(tc.path, tc.suffix); got != tc.want {
+			t.Errorf("isEncryptedPath(%q, %q) = %v, want %v", tc.path, tc.suffix, got, tc.want)
+		}
+	}
+}
+
+func TestSplitCSV(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"   ", nil},
+		{"a", []string{"a"}},
+		{"a,b,c", []string{"a", "b", "c"}},
+		{" a , b ,  c  ", []string{"a", "b", "c"}},
+		{"a,,b,", []string{"a", "b"}}, // empty parts skipped
+		{",", nil},
+	}
+	for _, tc := range cases {
+		got := splitCSV(tc.in)
+		if !equalStringSlice(got, tc.want) {
+			t.Errorf("splitCSV(%q) = %#v, want %#v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestParseEnvKeysInput(t *testing.T) {
+	t.Parallel()
+
+	available := []string{"API_KEY", "DB_URL", "JWT_SECRET"}
+
+	t.Run("empty selects all", func(t *testing.T) {
+		t.Parallel()
+		got, err := parseEnvKeysInput("", available)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !equalStringSlice(got, available) {
+			t.Fatalf("expected all keys, got %#v", got)
+		}
+	})
+
+	t.Run("'all' keyword selects all", func(t *testing.T) {
+		t.Parallel()
+		got, err := parseEnvKeysInput("ALL", available)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !equalStringSlice(got, available) {
+			t.Fatalf("expected all keys, got %#v", got)
+		}
+	})
+
+	t.Run("explicit subset", func(t *testing.T) {
+		t.Parallel()
+		got, err := parseEnvKeysInput("API_KEY, JWT_SECRET", available)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !equalStringSlice(got, []string{"API_KEY", "JWT_SECRET"}) {
+			t.Fatalf("unexpected subset, got %#v", got)
+		}
+	})
+
+	t.Run("dedupe", func(t *testing.T) {
+		t.Parallel()
+		got, err := parseEnvKeysInput("API_KEY,API_KEY,JWT_SECRET", available)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !equalStringSlice(got, []string{"API_KEY", "JWT_SECRET"}) {
+			t.Fatalf("expected dedupe, got %#v", got)
+		}
+	})
+
+	t.Run("unknown key errors", func(t *testing.T) {
+		t.Parallel()
+		_, err := parseEnvKeysInput("API_KEY,DOES_NOT_EXIST", available)
+		if err == nil {
+			t.Fatalf("expected error for unknown key")
+		}
+		if !strings.Contains(err.Error(), "DOES_NOT_EXIST") {
+			t.Fatalf("expected error to mention unknown key, got %v", err)
+		}
+	})
+
+	t.Run("only commas errors", func(t *testing.T) {
+		t.Parallel()
+		_, err := parseEnvKeysInput(",,,", available)
+		if err == nil {
+			t.Fatalf("expected error for empty input")
+		}
+	})
+}
+
+func TestExtractAgeSecretKey(t *testing.T) {
+	t.Parallel()
+
+	const key = "AGE-SECRET-KEY-1MT2MKR4WF6L6Q4X6ULU9CCFT78QCR2YJRU3ZWY2U0XX0DSAS2UXQJQJLRG"
+
+	t.Run("plain", func(t *testing.T) {
+		if got := extractAgeSecretKey(key); got != key {
+			t.Fatalf("expected %q, got %q", key, got)
+		}
+	})
+
+	t.Run("embedded in prose", func(t *testing.T) {
+		got := extractAgeSecretKey("paste your key below:\n" + key + "\nthanks!")
+		if got != key {
+			t.Fatalf("expected key extraction from prose, got %q", got)
+		}
+	})
+
+	t.Run("quoted", func(t *testing.T) {
+		got := extractAgeSecretKey(`"age secret: ` + key + `"`)
+		if got != key {
+			t.Fatalf("expected key extraction from quoted text, got %q", got)
+		}
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		if got := extractAgeSecretKey("nothing here"); got != "" {
+			t.Fatalf("expected empty result, got %q", got)
+		}
+	})
+}
+
+func TestFilterPathsByQuery(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/tmp/notes.md",
+		"/tmp/.env",
+		"/tmp/secrets.yaml",
+		"/home/user/data.json",
+	}
+
+	t.Run("substring on basename", func(t *testing.T) {
+		got := filterPathsByQuery(paths, "notes")
+		if !equalStringSlice(got, []string{"/tmp/notes.md"}) {
+			t.Fatalf("expected single match on basename, got %#v", got)
+		}
+	})
+
+	t.Run("substring on full path", func(t *testing.T) {
+		got := filterPathsByQuery(paths, "user")
+		if !equalStringSlice(got, []string{"/home/user/data.json"}) {
+			t.Fatalf("expected full-path match, got %#v", got)
+		}
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		got := filterPathsByQuery(paths, "SECRETS")
+		if !equalStringSlice(got, []string{"/tmp/secrets.yaml"}) {
+			t.Fatalf("expected case-insensitive match, got %#v", got)
+		}
+	})
+
+	t.Run("no match", func(t *testing.T) {
+		got := filterPathsByQuery(paths, "nope")
+		if len(got) != 0 {
+			t.Fatalf("expected empty result, got %#v", got)
+		}
+	})
+
+	t.Run("empty query returns all", func(t *testing.T) {
+		got := filterPathsByQuery(paths, "")
+		if len(got) != len(paths) {
+			t.Fatalf("expected all paths when query empty, got %d", len(got))
+		}
+	})
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -78,9 +78,49 @@ func main() {
 		stdout: os.Stdout,
 		stderr: os.Stderr,
 	}); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		fmt.Fprintln(os.Stderr, "Error:", humanizeError(err))
 		os.Exit(1)
 	}
+}
+
+// humanizeError translates low-level errors into actionable messages with
+// suggestions. Returns err unchanged when no friendly mapping exists.
+func humanizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+
+	// Authentication failures from AEAD ciphers surface as low-level crypto
+	// messages. Detect the common patterns and present a single, clear cause.
+	if strings.Contains(msg, "chacha20poly1305: message authentication failed") ||
+		strings.Contains(msg, "hmac mismatch") ||
+		strings.Contains(msg, "authentication failed") {
+		return fmt.Errorf("wrong password or corrupted file (password backend): %w", err)
+	}
+
+	// Strip os.* syscall framing that leaks "openat", "read", "stat", etc.,
+	// because end users do not care which syscall failed — only the path.
+	// Go's *PathError formats as "<op> <path>: <errno>".
+	for _, prefix := range []string{"openat ", "open ", "read ", "stat ", "lstat ", "remove ", "rename "} {
+		if !strings.HasPrefix(msg, prefix) {
+			continue
+		}
+		parts := strings.SplitN(msg, ": ", 2)
+		if len(parts) != 2 {
+			break
+		}
+		// "<op> <path>" — recover the path.
+		pathAndOp := strings.TrimPrefix(parts[0], prefix)
+		return fmt.Errorf("file not found or unreadable: %s: %s", pathAndOp, parts[1])
+	}
+
+	// Unknown command — keep current message but suggest running help.
+	if strings.HasPrefix(msg, "unknown command ") || strings.HasPrefix(msg, "unknown env subcommand ") {
+		return fmt.Errorf("%w\n  hint: run 'dpx help' to see available commands", err)
+	}
+
+	return err
 }
 
 func run(args []string, opts runOptions) error {
@@ -2395,6 +2435,44 @@ func printDoctorReport(w io.Writer, report doctorReport) {
 	fmt.Fprintf(w, "Recipients: %d\n", report.RecipientCount)
 	fmt.Fprintf(w, "Suggested Files: %d\n", report.SuggestedFiles)
 	fmt.Fprintf(w, "Encrypted Files: %d\n", report.EncryptedFiles)
+
+	printDoctorSuggestions(w, report)
+}
+
+// printDoctorSuggestions emits actionable next steps based on the report
+// state. Empty when everything is healthy.
+func printDoctorSuggestions(w io.Writer, report doctorReport) {
+	var hints []string
+
+	if report.ConfigError != nil {
+		hints = append(hints, fmt.Sprintf("Fix the config syntax error: %v", report.ConfigError))
+	} else if !report.Config.Exists {
+		hints = append(hints, "Run `dpx init` to create a .dpx.yaml in this directory")
+	}
+
+	if !report.KeyExists && report.RecipientCount == 0 {
+		hints = append(hints, "Run `dpx keygen` to generate an age key pair for the age backend")
+	} else if !report.KeyExists && report.RecipientCount > 0 {
+		hints = append(hints, "Config references recipients but no key file found at "+report.KeyPath)
+	}
+
+	if report.SuggestedFiles == 0 && report.EncryptedFiles == 0 && report.Config.Exists {
+		hints = append(hints, "Drop a .env (or similar secret file) here, then run `dpx encrypt <file>`")
+	}
+
+	if report.EncryptedFiles > 0 && !report.KeyExists {
+		hints = append(hints, "Encrypted files exist but no key file is available — restore the key from backup to decrypt")
+	}
+
+	if len(hints) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Suggestions:")
+	for i, hint := range hints {
+		fmt.Fprintf(w, "  %d. %s\n", i+1, hint)
+	}
 }
 
 func findEncryptedFiles(root string) ([]string, error) {
